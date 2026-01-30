@@ -5,116 +5,124 @@ import numpy as np
 # Page configuration
 st.set_page_config(page_title="Graduation Outcome Dashboard", layout="wide")
 
-# 1. Setup Data Loading
-# Replacing the /edit... with /export?format=csv to read directly into pandas
+# Google Sheet CSV Export Link
 SHEET_ID = "1LNHrVooUxwzmO9lQ3w8tlbZTtHQbCbMXemk8qGcycLQ"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
 @st.cache_data
 def load_data():
+    # Read the sheet
     df = pd.read_csv(SHEET_URL)
-    # Clean column names (strip spaces)
+    
+    # Standardize column names (removing extra spaces)
     df.columns = df.columns.str.strip()
     
-    # Identify specific columns by descriptions provided
-    # Column E: Year of graduation (UG/PG pass)
-    # Column F: Did you pass UG/PG with in the stipulated time (UG: 3 years and PG: 2 Years)
-    # Column G: Status
-    # Salary Column: "Annual CTC (₹ per year) : ..."
+    # Mapping specific columns based on your requirements
+    # Column E: Year of graduation
+    # Column F: Stipulated time pass (Yes/No)
+    # Column G: Status (Placed / Higher Studies)
+    # Column M: Annual CTC
     
-    # Cleaning data types
-    df['Year of graduation (UG/PG pass)'] = pd.to_numeric(df['Year of graduation (UG/PG pass)'], errors='coerce')
+    # 1. Clean Year Column
+    year_col = "Year of graduation (UG/PG pass)"
+    df[year_col] = pd.to_numeric(df[year_col], errors='coerce')
     
-    # Clean Salary Column (extract numbers only)
+    # 2. Identify and Clean Salary Column (Column M)
+    # We look for the column starting with "Annual CTC"
     salary_col = [c for c in df.columns if "Annual CTC" in c][0]
-    df['clean_salary'] = df[salary_col].replace(r'[\s,₹Rs\.]', '', regex=True)
+    
+    # Convert to numeric: remove any stray symbols just in case user ignored instructions
+    df['clean_salary'] = df[salary_col].astype(str).replace(r'[\s,₹Rs\.]', '', regex=True)
     df['clean_salary'] = pd.to_numeric(df['clean_salary'], errors='coerce')
     
-    return df
+    return df, salary_col
 
 try:
-    df = load_data()
+    df, full_salary_header = load_data()
 
-    st.title("🎓 Graduation Outcome Data Dashboard")
+    st.title("🎓 Graduation Outcome Analysis")
+    st.markdown("---")
 
-    # --- Sidebar Inputs ---
-    st.sidebar.header("Filter Data")
+    # --- Sidebar Filters ---
+    st.sidebar.header("Data Selection")
     
-    # Unique values for filters
-    departments = sorted(df['Department Name'].unique().tolist())
-    programs = sorted(df['Program'].unique().tolist())
-    years = sorted([int(y) for y in df['Year of graduation (UG/PG pass)'].dropna().unique()])
+    depts = sorted(df['Department Name'].dropna().unique().tolist())
+    progs = sorted(df['Program'].dropna().unique().tolist())
+    years = sorted([int(y) for y in df['Year of graduation (UG/PG pass)'].dropna().unique()], reverse=True)
 
-    selected_dept = st.sidebar.selectbox("Select Department", departments)
-    selected_prog = st.sidebar.selectbox("Select Program", programs)
-    selected_year = st.sidebar.selectbox("Select Year of Graduation", years)
+    sel_dept = st.sidebar.selectbox("Department", depts)
+    sel_prog = st.sidebar.selectbox("Program (UG/PG)", progs)
+    sel_year = st.sidebar.selectbox("Year of Graduation", years)
 
-    # --- Filtering Logic ---
-    # Filter 1: Main filter for Department, Program, and Year
-    filtered_df = df[
-        (df['Department Name'] == selected_dept) &
-        (df['Program'] == selected_prog) &
-        (df['Year of graduation (UG/PG pass)'] == selected_year)
-    ]
-
-    # Filter 2: Median Salary filter (Year and Program only, no Dept)
-    salary_df = df[
-        (df['Program'] == selected_prog) &
-        (df['Year of graduation (UG/PG pass)'] == selected_year)
-    ]
-
-    # --- Calculations ---
-    # Total students in the filtered selection
-    total_students = len(filtered_df)
-    
-    # Column F check: Stipulated time (Column index 5 usually)
+    # --- Defined Column Names ---
     pass_col = "Did you pass UG/PG with in the stipulated time (UG: 3 years and PG: 2 Years)"
     status_col = "Status"
+    year_col = "Year of graduation (UG/PG pass)"
 
-    # Number of students who passed (F column == Yes)
-    students_passed = len(filtered_df[filtered_df[pass_col].str.strip().str.lower() == 'yes'])
+    # --- Filtering Logic ---
+    # Filter for counts (Dept + Program + Year)
+    main_filter = df[
+        (df['Department Name'] == sel_dept) &
+        (df['Program'] == sel_prog) &
+        (df[year_col] == sel_year)
+    ]
+
+    # Filter for Salary (Program + Year ONLY)
+    salary_filter = df[
+        (df['Program'] == sel_prog) &
+        (df[year_col] == sel_year)
+    ]
+
+    # --- Metrics Calculation ---
+    # 1. Students who passed in stipulated time (F = Yes)
+    passed_count = len(main_filter[main_filter[pass_col].str.strip().str.lower() == 'yes'])
     
-    # Higher Studies (G column == Higher Studies) - ONLY if passed (F == Yes)
-    higher_studies = len(filtered_df[
-        (filtered_df[status_col] == 'Higher Studies') & 
-        (filtered_df[pass_col].str.strip().str.lower() == 'yes')
+    # 2. Higher Studies (Status = Higher Studies AND F = Yes)
+    higher_studies = len(main_filter[
+        (main_filter[status_col] == 'Higher Studies') & 
+        (main_filter[pass_col].str.strip().str.lower() == 'yes')
     ])
     
-    # Placed (G column == Placed / Employed) - ONLY if passed (F == Yes)
-    placed_students = len(filtered_df[
-        (filtered_df[status_col] == 'Placed / Employed') & 
-        (filtered_df[pass_col].str.strip().str.lower() == 'yes')
+    # 3. Placed (Status = Placed / Employed AND F = Yes)
+    placed_count = len(main_filter[
+        (main_filter[status_col] == 'Placed / Employed') & 
+        (main_filter[pass_col].str.strip().str.lower() == 'yes')
     ])
 
-    # Salary Stats (Median, Min, Max) - Based on Program and Year (Salary_df)
-    # Only calculate for students with 'Placed / Employed' status in the salary_df
-    placed_salary_data = salary_df[
-        (salary_df[status_col] == 'Placed / Employed') & 
-        (salary_df['clean_salary'].notnull())
+    # 4. Salary Stats (Based on Salary Filter)
+    # Only calculate for students with 'Placed / Employed' status and valid salary
+    salary_data = salary_filter[
+        (salary_filter[status_col] == 'Placed / Employed') & 
+        (salary_filter['clean_salary'] > 0)
     ]['clean_salary']
 
-    # --- UI Layout ---
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Students Passed (Stipulated Time)", students_passed)
-    col2.metric("Students Placed", placed_students)
-    col3.metric("Higher Studies", higher_studies)
+    # --- Display UI ---
+    st.subheader(f"Results for {sel_dept} ({sel_prog}) - {sel_year}")
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Total Passed (Stipulated Time)", passed_count)
+    with c2:
+        st.metric("Placed / Employed", placed_count)
+    with c3:
+        st.metric("Higher Studies", higher_studies)
 
     st.markdown("---")
-    st.subheader(f"Salary Statistics for {selected_prog} - {selected_year}")
-    st.info("Note: Median, Min, and Max salary are calculated across all departments for the selected Program and Year.")
+    st.subheader(f"Salary Benchmarks: {sel_prog} - {sel_year}")
+    st.caption("Calculated across all departments for the selected Program and Year.")
 
-    if not placed_salary_data.empty:
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Median Salary", f"₹{placed_salary_data.median():,.2f}")
-        m2.metric("Minimum Salary", f"₹{placed_salary_data.min():,.2f}")
-        m3.metric("Maximum Salary", f"₹{placed_salary_data.max():,.2f}")
+    if not salary_data.empty:
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Median CTC", f"₹{salary_data.median():,.0f}")
+        s2.metric("Minimum CTC", f"₹{salary_data.min():,.0f}")
+        s3.metric("Maximum CTC", f"₹{salary_data.max():,.0f}")
     else:
-        st.warning("No placement salary data available for the selected Program and Year.")
+        st.warning("No salary data available for the current selection.")
 
-    # --- Raw Data View (Optional) ---
-    with st.expander("View Filtered Data"):
-        st.dataframe(filtered_df)
+    # --- Data Transparency ---
+    with st.expander("View Filtered Raw Data"):
+        st.dataframe(main_filter)
 
 except Exception as e:
-    st.error(f"Error loading data: {e}")
-    st.write("Please ensure the Google Sheet link is public and the column names match your requirements.")
+    st.error(f"An error occurred: {e}")
+    st.info("Ensure the Google Sheet is shared as 'Anyone with the link can view'.")
