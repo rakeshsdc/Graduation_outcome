@@ -12,85 +12,119 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=cs
 def load_data():
     df = pd.read_csv(SHEET_URL)
     
-    # 1. Clean whitespace from headers and text cells to prevent duplicates
+    # Clean whitespace from headers
     df.columns = df.columns.str.strip()
-    df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
     
-    # 2. Convert Year to numeric
+    # 1. Clean String Columns
+    # We strip spaces and handle NaN values
+    text_cols = ['Department Name', 'Program', 'Status', 
+                 'Did you pass UG/PG with in the stipulated time (UG: 3 years and PG: 2 Years)']
+    for col in text_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+
+    # 2. Year Column Cleaning
     year_col = "Year of graduation (UG/PG pass)"
     df[year_col] = pd.to_numeric(df[year_col], errors='coerce')
     
-    # 3. Handle Salary (Column M)
+    # 3. Salary Column (Column M) Cleaning
     salary_col = [c for c in df.columns if "Annual CTC" in c][0]
     df['clean_salary'] = df[salary_col].astype(str).replace(r'[\s,₹Rs\.]', '', regex=True)
     df['clean_salary'] = pd.to_numeric(df['clean_salary'], errors='coerce')
+    
+    # 4. Create a "Short Code" for Departments (First 4 Letters)
+    # This groups "Botany", "Botany ", "BOTANY" together as "BOTA"
+    df['dept_short'] = df['Department Name'].str[:4].str.upper()
     
     return df
 
 try:
     df = load_data()
 
-    # Define Header Names
-    pass_col = "Did you pass UG/PG with in the stipulated time (UG: 3 years and PG: 2 Years)"
-    status_col = "Status"
-    year_col = "Year of graduation (UG/PG pass)"
-    dept_col = "Department Name"
-    prog_col = "Program"
+    # Column Mapping
+    dept_col = 'Department Name'
+    prog_col = 'Program'
+    year_col = 'Year of graduation (UG/PG pass)'
+    pass_col = 'Did you pass UG/PG with in the stipulated time (UG: 3 years and PG: 2 Years)'
+    status_col = 'Status'
 
     st.title("🎓 Graduation Outcome Analysis")
 
     # --- Sidebar Filters ---
-    st.sidebar.header("Filters")
-    depts = sorted(df[dept_col].dropna().unique().tolist())
-    progs = sorted(df[prog_col].dropna().unique().tolist())
-    years = sorted([int(y) for y in df[year_col].dropna().unique()], reverse=True)
-
-    sel_dept = st.sidebar.selectbox("Select Department", depts)
-    sel_prog = st.sidebar.selectbox("Select Program", progs)
-    sel_year = st.sidebar.selectbox("Select Year", years)
-
-    # --- LOGIC 1: COUNTS (Filtered by Dept, Program, Year) ---
-    dept_filtered_df = df[
-        (df[dept_col] == sel_dept) &
-        (df[prog_col] == sel_prog) &
-        (df[year_col] == sel_year)
-    ]
-
-    # Calculate Counts
-    passed_count = len(dept_filtered_df[dept_filtered_df[pass_col] == 'Yes'])
-    placed_count = len(dept_filtered_df[(dept_filtered_df[status_col] == 'Placed / Employed') & (dept_filtered_df[pass_col] == 'Yes')])
-    higher_studies_count = len(dept_filtered_df[(dept_filtered_df[status_col] == 'Higher Studies') & (dept_filtered_df[pass_col] == 'Yes')])
-
-    # --- LOGIC 2: SALARY (Filtered by Program and Year ONLY) ---
-    salary_filtered_df = df[
-        (df[prog_col] == sel_prog) &
-        (df[year_col] == sel_year)
+    st.sidebar.header("Search Filters")
+    
+    # Pre-defined list as requested
+    valid_depts = [
+        "Botany", "Chemistry", "Commerce", "Communicative English", 
+        "Economics", "English", "Hindi", "History", "Malayalam", 
+        "Mathematics", "Microbiology", "Physics", "Zoology"
     ]
     
-    salary_values = salary_filtered_df[
-        (salary_filtered_df[status_col] == 'Placed / Employed') & 
-        (salary_filtered_df['clean_salary'] > 0)
-    ]['clean_salary']
+    sel_dept = st.sidebar.selectbox("Select Department", sorted(valid_depts))
+    sel_prog = st.sidebar.selectbox("Select Program", ["UG", "PG"])
+    
+    years = sorted([int(y) for y in df[year_col].dropna().unique()], reverse=True)
+    sel_year = st.sidebar.selectbox("Select Year of Graduation", years)
 
-    # --- Display Metrics ---
-    st.subheader(f"Data for {sel_dept} | {sel_prog} | {sel_year}")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Passed (Stipulated Time)", passed_count)
-    m2.metric("Placed / Employed", placed_count)
-    m3.metric("Higher Studies", higher_studies_count)
+    # --- THE FILTERING LOGIC ---
+    
+    # Filter by First 4 letters of the selected department
+    dept_code = sel_dept[:4].upper()
+    
+    # Apply filters: Department (4-char match) + Program + Year
+    filtered_df = df[
+        (df['dept_short'] == dept_code) & 
+        (df[prog_col] == sel_prog) & 
+        (df[year_col] == sel_year)
+    ]
+
+    # --- COUNTING LOGIC ---
+    # 1. Total Passed: Must be "Yes" in Column F
+    passed_mask = (filtered_df[pass_col].str.lower() == 'yes')
+    passed_count = len(filtered_df[passed_mask])
+    
+    # 2. Placed: Must be "Placed / Employed" in Column G AND "Yes" in Column F
+    placed_count = len(filtered_df[
+        (filtered_df[status_col] == 'Placed / Employed') & (passed_mask)
+    ])
+    
+    # 3. Higher Studies: Must be "Higher Studies" in Column G AND "Yes" in Column F
+    higher_studies_count = len(filtered_df[
+        (filtered_df[status_col] == 'Higher Studies') & (passed_mask)
+    ])
+
+    # --- SALARY LOGIC (Program and Year Only) ---
+    salary_filter = df[
+        (df[prog_col] == sel_prog) & 
+        (df[year_col] == sel_year) &
+        (df[status_col] == 'Placed / Employed') &
+        (df['clean_salary'] > 0)
+    ]
+    salary_data = salary_filter['clean_salary']
+
+    # --- DISPLAY ---
+    st.header(f"Results for {sel_dept}")
+    st.write(f"**Program:** {sel_prog} | **Year:** {sel_year}")
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Passed (Stipulated Time)", passed_count)
+    c2.metric("Placed / Employed", placed_count)
+    c3.metric("Higher Studies", higher_studies_count)
 
     st.markdown("---")
+    st.subheader(f"Salary Stats ({sel_prog} - {sel_year})")
     
-    st.subheader(f"Salary Benchmarks ({sel_prog} - {sel_year})")
-    st.caption("Salary metrics are calculated based on the entire Program/Year across all departments.")
-    
-    if not salary_values.empty:
+    if not salary_data.empty:
         s1, s2, s3 = st.columns(3)
-        s1.metric("Median CTC", f"₹{salary_values.median():,.0f}")
-        s2.metric("Min CTC", f"₹{salary_values.min():,.0f}")
-        s3.metric("Max CTC", f"₹{salary_values.max():,.0f}")
+        s1.metric("Median CTC", f"₹{salary_data.median():,.0f}")
+        s2.metric("Min CTC", f"₹{salary_data.min():,.0f}")
+        s3.metric("Max CTC", f"₹{salary_data.max():,.0f}")
     else:
-        st.warning("No valid placement salary data found for this selection.")
+        st.warning("No salary data available for these filters.")
+
+    # Validation Table (For your peace of mind to check against the sheet)
+    with st.expander("Show student list for this selection"):
+        st.dataframe(filtered_df[[dept_col, prog_col, year_col, pass_col, status_col]])
 
 except Exception as e:
-    st.error(f"Something went wrong: {e}")
+    st.error(f"Critical Error: {e}")
